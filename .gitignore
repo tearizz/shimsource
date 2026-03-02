@@ -45,3 +45,5 @@ shim_cert.h
 !/test-data/
 /test-random.h
 version.c
+gnu-efi/.gitattributes
+gnu-efi/.gitignore
