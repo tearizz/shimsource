@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+/*
+ * Copyright 2015 SUSE LINUX GmbH <glin@suse.com>
+ *
+ * Significant portions of this code are derived from Tianocore
+ * (http://tianocore.sf.net) and are Copyright 2009-2012 Intel
+ * Corporation.
+ */
+
+#ifndef SHIM_HTTPBOOT_H
+#define SHIM_HTTPBOOT_H
+
+extern BOOLEAN find_httpboot(EFI_HANDLE device);
+extern EFI_STATUS httpboot_fetch_buffer(EFI_HANDLE image, VOID **buffer,
+					UINT64 *buf_size);
+extern EFI_STATUS httpboot_fetch_buffer_uri(EFI_HANDLE image,
+                                            EFI_HANDLE nic_handle, CHAR8 *uri,
+                                            VOID **buffer, UINT64 *buf_size);
+#endif /* SHIM_HTTPBOOT_H */
