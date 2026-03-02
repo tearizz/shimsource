@@ -50,6 +50,9 @@ CFLAGS = $(OPTIMIZATIONS) -std=gnu11 \
 # of the "include" directory
 CFLAGS += -isystem $(shell $(CC) $(ARCH_CFLAGS) -print-file-name=include-fixed)
 
+# And on Debian also check the multi-arch include path
+CFLAGS += -isystem /usr/include/$(shell $(CC) $(ARCH_CFLAGS) -print-multiarch)
+
 export CFLAGS_LTO CFLAGS_GCOV
 
 libefi-test.a :
@@ -89,7 +92,7 @@ test-mock-variables: CFLAGS+=-DHAVE_SHIM_LOCK_GUID
 test-mok-mirror_FILES = mok.c globals.c tpm.c lib/guid.c lib/variables.c mock-variables.c
 test-mok-mirror: CFLAGS+=-DHAVE_START_IMAGE -DHAVE_SHIM_LOCK_GUID
 
-test-sbat_FILES = csv.c lib/variables.c lib/guid.c
+test-sbat_FILES = csv.c lib/variables.c lib/guid.c sbat_var.S
 test-sbat :: CFLAGS+=-DHAVE_GET_VARIABLE -DHAVE_GET_VARIABLE_ATTR -DHAVE_SHIM_LOCK_GUID
 
 test-str_FILES = lib/string.c

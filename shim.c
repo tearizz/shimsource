@@ -174,6 +174,7 @@ static CHECK_STATUS check_db_cert_in_ram(EFI_SIGNATURE_LIST *CertList,
 				}
 			} else if (verbose) {
 				console_print(L"Not a DER encoded x.509 Certificate");
+				dprint(L"cert:\n");
 				dhexdumpat(Cert->SignatureData, CertSize, 0);
 			}
 		}
@@ -398,22 +399,22 @@ static EFI_STATUS check_allowlist (WIN_CERTIFICATE_EFI_PKCS *cert,
 	}
 #endif
 
-	if (check_db_hash(L"MokList", SHIM_LOCK_GUID, sha256hash,
+	if (check_db_hash(L"MokListRT", SHIM_LOCK_GUID, sha256hash,
 			  SHA256_DIGEST_SIZE, EFI_CERT_SHA256_GUID)
 				== DATA_FOUND) {
 		verification_method = VERIFIED_BY_HASH;
 		update_verification_method(VERIFIED_BY_HASH);
 		return EFI_SUCCESS;
 	} else {
-		LogError(L"check_db_hash(MokList, sha256hash) != DATA_FOUND\n");
+		LogError(L"check_db_hash(MokListRT, sha256hash) != DATA_FOUND\n");
 	}
-	if (cert && check_db_cert(L"MokList", SHIM_LOCK_GUID, cert, sha256hash)
+	if (cert && check_db_cert(L"MokListRT", SHIM_LOCK_GUID, cert, sha256hash)
 			== DATA_FOUND) {
 		verification_method = VERIFIED_BY_CERT;
 		update_verification_method(VERIFIED_BY_CERT);
 		return EFI_SUCCESS;
 	} else if (cert) {
-		LogError(L"check_db_cert(MokList, sha256hash) != DATA_FOUND\n");
+		LogError(L"check_db_cert(MokListRT, sha256hash) != DATA_FOUND\n");
 	}
 
 	update_verification_method(VERIFIED_BY_NOTHING);
@@ -463,7 +464,6 @@ static EFI_STATUS
 verify_one_signature(WIN_CERTIFICATE_EFI_PKCS *sig,
 		     UINT8 *sha256hash, UINT8 *sha1hash)
 {
-  return EFI_SUCCESS;
 	EFI_STATUS efi_status;
 
 	/*
@@ -554,20 +554,20 @@ verify_one_signature(WIN_CERTIFICATE_EFI_PKCS *sig,
 	}
 #endif /* defined(VENDOR_CERT_FILE) */
 
-//	return efi_status;
+	return efi_status;
 }
 
 /*
  * Check that the signature is valid and matches the binary
  */
 EFI_STATUS
-verify_buffer (char *data, int datasize,
-	       PE_COFF_LOADER_IMAGE_CONTEXT *context,
-	       UINT8 *sha256hash, UINT8 *sha1hash)
+verify_buffer_authenticode (char *data, int datasize,
+			    PE_COFF_LOADER_IMAGE_CONTEXT *context,
+			    UINT8 *sha256hash, UINT8 *sha1hash)
 {
 	EFI_STATUS ret_efi_status;
 	size_t size = datasize;
-    size_t offset = 0;
+	size_t offset = 0;
 	unsigned int i = 0;
 
 	if (datasize < 0)
@@ -595,8 +595,8 @@ verify_buffer (char *data, int datasize,
 	drain_openssl_errors();
 	ret_efi_status = check_denylist(NULL, sha256hash, sha1hash);
 	if (EFI_ERROR(ret_efi_status)) {
-		perror(L"Binary is forbidden\n");
-		dprint(L"Binary is forbidden: %r\n", ret_efi_status);
+//		perror(L"Binary is forbidden\n");
+//		dprint(L"Binary is forbidden: %r\n", ret_efi_status);
 		PrintErrors();
 		ClearErrors();
 		crypterr(ret_efi_status);
@@ -665,9 +665,9 @@ verify_buffer (char *data, int datasize,
 		if (sig->Hdr.wCertificateType == WIN_CERT_TYPE_PKCS_SIGNED_DATA) {
 			EFI_STATUS efi_status;
 
-		dprint(L"Attempting to verify signature %d:\n", i++);
+			dprint(L"Attempting to verify signature %d:\n", i++);
 
-		ret_efi_status = verify_one_signature(sig, sha256hash, sha1hash);
+			efi_status = verify_one_signature(sig, sha256hash, sha1hash);
 
 			/*
 			 * If we didn't get EFI_SECURITY_VIOLATION from
@@ -677,8 +677,8 @@ verify_buffer (char *data, int datasize,
 			 * So don't clobber successes with security violation
 			 * here; that just means it isn't a success.
 			 */
-		if (ret_efi_status != EFI_SUCCESS)
-			ret_efi_status = efi_status;
+			if (ret_efi_status != EFI_SUCCESS)
+				ret_efi_status = efi_status;
 		} else {
 			perror(L"Unsupported certificate type %x\n",
 				sig->Hdr.wCertificateType);
@@ -714,6 +714,73 @@ verify_buffer (char *data, int datasize,
 
 	drain_openssl_errors();
 	return ret_efi_status;
+}
+
+/*
+ * Check that the binary is permitted to load by SBAT.
+ */
+EFI_STATUS
+verify_buffer_sbat (char *data, int datasize,
+		    PE_COFF_LOADER_IMAGE_CONTEXT *context)
+{
+	int i;
+	EFI_IMAGE_SECTION_HEADER *Section;
+	char *SBATBase = NULL;
+	size_t SBATSize = 0;
+
+	Section = context->FirstSection;
+	for (i = 0; i < context->NumberOfSections; i++, Section++) {
+		if (CompareMem(Section->Name, ".sbat\0\0\0", 8) != 0)
+			continue;
+
+		if (SBATBase || SBATSize) {
+			perror(L"Image has multiple SBAT sections\n");
+			return EFI_UNSUPPORTED;
+		}
+
+		if (Section->NumberOfRelocations != 0 ||
+		    Section->PointerToRelocations != 0) {
+			perror(L"SBAT section has relocations\n");
+			return EFI_UNSUPPORTED;
+		}
+
+		/* The virtual size corresponds to the size of the SBAT
+		 * metadata and isn't necessarily a multiple of the file
+		 * alignment. The on-disk size is a multiple of the file
+		 * alignment and is zero padded. Make sure that the
+		 * on-disk size is at least as large as virtual size,
+		 * and ignore the section if it isn't. */
+		if (Section->SizeOfRawData &&
+		    Section->SizeOfRawData >= Section->Misc.VirtualSize) {
+			SBATBase = ImageAddress(data, datasize,
+						Section->PointerToRawData);
+			SBATSize = Section->SizeOfRawData;
+			dprint(L"sbat section base:0x%lx size:0x%lx\n",
+			       SBATBase, SBATSize);
+		}
+	}
+
+	return verify_sbat_section(SBATBase, SBATSize);
+}
+
+/*
+ * Check that the signature is valid and matches the binary and that
+ * the binary is permitted to load by SBAT.
+ */
+EFI_STATUS
+verify_buffer (char *data, int datasize,
+	       PE_COFF_LOADER_IMAGE_CONTEXT *context,
+	       UINT8 *sha256hash, UINT8 *sha1hash)
+{
+	EFI_STATUS efi_status;
+
+	efi_status = verify_buffer_sbat(data, datasize, context);
+	if (EFI_ERROR(efi_status))
+		return efi_status;
+
+	efi_status = verify_buffer_authenticode(data, datasize, context, sha256hash, sha1hash);
+	
+	return efi_status;
 }
 
 static int
@@ -957,7 +1024,7 @@ EFI_STATUS shim_verify (void *buffer, UINT32 size)
 		efi_status = EFI_SUCCESS;
 		goto done;
 	}
-	
+
 	/* 
 	 * CRITICAL: Make a copy of buffer before verification to prevent
 	 * HTTP operations from corrupting the caller's memory (e.g., kernel code)
@@ -1036,17 +1103,12 @@ restore_loaded_image(VOID)
 /*
  * Load and run an EFI executable
  */
-EFI_STATUS start_image(EFI_HANDLE image_handle, CHAR16 *ImagePath)
+EFI_STATUS read_image(EFI_HANDLE image_handle, CHAR16 *ImagePath,
+		      CHAR16 **PathName, void **data, int *datasize)
 {
 	EFI_STATUS efi_status;
-	EFI_IMAGE_ENTRY_POINT entry_point;
-	EFI_PHYSICAL_ADDRESS alloc_address;
-	UINTN alloc_pages;
-	CHAR16 *PathName = NULL;
 	void *sourcebuffer = NULL;
 	UINT64 sourcesize = 0;
-	void *data = NULL;
-	int datasize = 0;
 
 	/*
 	 * We need to refer to the loaded image protocol on the running
@@ -1062,25 +1124,25 @@ EFI_STATUS start_image(EFI_HANDLE image_handle, CHAR16 *ImagePath)
 	/*
 	 * Build a new path from the existing one plus the executable name
 	 */
-	efi_status = generate_path_from_image_path(shim_li, ImagePath, &PathName);
+	efi_status = generate_path_from_image_path(shim_li, ImagePath, PathName);
 	if (EFI_ERROR(efi_status)) {
 		perror(L"Unable to generate path %s: %r\n", ImagePath,
 		       efi_status);
-		goto done;
+		return efi_status;
 	}
+
+	/* Force KeyLess Signature Services */
+	//BOOLEAN result;
+	//console_print(L"[start image] grub image path: %a \n",ImagePath);
+	//result = osign_verify(image_handle,*PathName);
+	//console_print(L"[start image] result(d): %d\n",result);
 	
-	/* Force Verify */
-	//  BOOLEAN result;
-	//  console_print(L"[start image] grub image path: %a \n",ImagePath);
-	//  result = osign_verify(image_handle,PathName);
-	//  console_print(L"[start image] result(d): %d\n",result);
-	
-	//  if (result == true){
-	//  	console_print(L"verify success\n");
-	//  }else if (result == false) {
-	//  	console_print(L"verify failed\n");
-	//  	return 0;
-	//  }
+	//if (result == true){
+	//	console_print(L"verify success\n");
+	//}else if (result == false) {
+	//	console_print(L"verify failed\n");
+	//	return 0;
+	//}
 
 	if (findNetboot(shim_li->DeviceHandle)) {
 		efi_status = parseNetbootinfo(image_handle);
@@ -1095,8 +1157,8 @@ EFI_STATUS start_image(EFI_HANDLE image_handle, CHAR16 *ImagePath)
 			       efi_status);
 			return efi_status;
 		}
-		data = sourcebuffer;
-		datasize = sourcesize;
+		*data = sourcebuffer;
+		*datasize = sourcesize;
 	} else if (find_httpboot(shim_li->DeviceHandle)) {
 		efi_status = httpboot_fetch_buffer (image_handle,
 						    &sourcebuffer,
@@ -1106,26 +1168,45 @@ EFI_STATUS start_image(EFI_HANDLE image_handle, CHAR16 *ImagePath)
 			       efi_status);
 			return efi_status;
 		}
-		data = sourcebuffer;
-		datasize = sourcesize;
+		*data = sourcebuffer;
+		*datasize = sourcesize;
 	} else {
 		/*
 		 * Read the new executable off disk
 		 */
-		efi_status = load_image(shim_li, &data, &datasize, PathName);
+		efi_status = load_image(shim_li, data, datasize, *PathName);
 		if (EFI_ERROR(efi_status)) {
-			perror(L"Fail to 1st load image %s: %r\n",
+			perror(L"Failed to load image %s: %r\n",
 			       PathName, efi_status);
 			PrintErrors();
 			ClearErrors();
-			goto done;
+			return efi_status;
 		}
 	}
 
-	if (datasize < 0) {
+	if (*datasize < 0)
 		efi_status = EFI_INVALID_PARAMETER;
+
+	return efi_status;
+}
+
+/*
+ * Load and run an EFI executable
+ */
+EFI_STATUS start_image(EFI_HANDLE image_handle, CHAR16 *ImagePath)
+{
+	EFI_STATUS efi_status;
+	EFI_IMAGE_ENTRY_POINT entry_point;
+	EFI_PHYSICAL_ADDRESS alloc_address;
+	UINTN alloc_pages;
+	CHAR16 *PathName = NULL;
+	void *data = NULL;
+	int datasize = 0;
+
+	efi_status = read_image(image_handle, ImagePath, &PathName, &data,
+				&datasize);
+	if (EFI_ERROR(efi_status))
 		goto done;
-	}
 
 	/*
 	 * We need to modify the loaded image protocol entry before running
@@ -1149,6 +1230,7 @@ EFI_STATUS start_image(EFI_HANDLE image_handle, CHAR16 *ImagePath)
 	efi_status = handle_image(data, datasize, shim_li, &entry_point,
 				  &alloc_address, &alloc_pages);
 	if (EFI_ERROR(efi_status)) {
+		perror(L"Failed to load image: %r\n", efi_status);
 		PrintErrors();
 		ClearErrors();
 		goto restore;
@@ -1195,7 +1277,6 @@ EFI_STATUS init_grub(EFI_HANDLE image_handle)
 		efi_status = start_image(image_handle,
 					 use_fb ? FALLBACK : second_stage);
 	}
-	
 
 	// If the filename is invalid, or the file does not exist,
 	// just fallback to the default loader.
@@ -1373,9 +1454,127 @@ uninstall_shim_protocols(void)
 }
 
 EFI_STATUS
+load_cert_file(EFI_HANDLE image_handle, CHAR16 *filename, CHAR16 *PathName)
+{
+	EFI_STATUS efi_status;
+	PE_COFF_LOADER_IMAGE_CONTEXT context;
+	EFI_IMAGE_SECTION_HEADER *Section;
+	EFI_SIGNATURE_LIST *certlist;
+	void *pointer;
+	UINT32 original;
+	int datasize = 0;
+	void *data = NULL;
+	int i;
+
+	efi_status = read_image(image_handle, filename, &PathName,
+				&data, &datasize);
+	if (EFI_ERROR(efi_status))
+		return efi_status;
+
+	efi_status = verify_image(data, datasize, shim_li, &context);
+	if (EFI_ERROR(efi_status))
+		return efi_status;
+
+	Section = context.FirstSection;
+	for (i = 0; i < context.NumberOfSections; i++, Section++) {
+		if (CompareMem(Section->Name, ".db\0\0\0\0\0", 8) == 0) {
+			original = user_cert_size;
+			if (Section->SizeOfRawData < sizeof(EFI_SIGNATURE_LIST)) {
+				continue;
+			}
+			pointer = ImageAddress(data, datasize,
+					       Section->PointerToRawData);
+			if (!pointer) {
+				continue;
+			}
+			certlist = pointer;
+			user_cert_size += certlist->SignatureListSize;;
+			user_cert = ReallocatePool(user_cert, original,
+						   user_cert_size);
+			CopyMem(user_cert + original, pointer,
+			        certlist->SignatureListSize);
+		}
+	}
+	FreePool(data);
+	return EFI_SUCCESS;
+}
+
+/* Read additional certificates from files (after verifying signatures) */
+EFI_STATUS
+load_certs(EFI_HANDLE image_handle)
+{
+	EFI_STATUS efi_status;
+	EFI_LOADED_IMAGE *li = NULL;
+	CHAR16 *PathName = NULL;
+	EFI_FILE *root, *dir;
+	EFI_FILE_INFO *info;
+	EFI_HANDLE device;
+	EFI_FILE_IO_INTERFACE *drive;
+	UINTN buffersize = 0;
+	void *buffer = NULL;
+
+	efi_status = gBS->HandleProtocol(image_handle, &EFI_LOADED_IMAGE_GUID,
+					 (void **)&li);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"Unable to init protocol\n");
+		return efi_status;
+	}
+
+	efi_status = generate_path_from_image_path(li, L"", &PathName);
+	if (EFI_ERROR(efi_status))
+		goto done;
+
+	device = li->DeviceHandle;
+	efi_status = gBS->HandleProtocol(device, &EFI_SIMPLE_FILE_SYSTEM_GUID,
+					 (void **)&drive);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"Failed to find fs: %r\n", efi_status);
+		goto done;
+	}
+
+	efi_status = drive->OpenVolume(drive, &root);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"Failed to open fs: %r\n", efi_status);
+		goto done;
+	}
+
+	efi_status = root->Open(root, &dir, PathName, EFI_FILE_MODE_READ, 0);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"Failed to open %s - %r\n", PathName, efi_status);
+		goto done;
+	}
+
+	while (1) {
+		int old = buffersize;
+		efi_status = dir->Read(dir, &buffersize, buffer);
+		if (efi_status == EFI_BUFFER_TOO_SMALL) {
+			buffer = ReallocatePool(buffer, old, buffersize);
+			continue;
+		} else if (EFI_ERROR(efi_status)) {
+			perror(L"Failed to read directory %s - %r\n", PathName,
+			       efi_status);
+			goto done;
+		}
+
+		info = (EFI_FILE_INFO *)buffer;
+		if (buffersize == 0 || !info)
+			goto done;
+
+		if (StrnCaseCmp(info->FileName, L"shim_certificate", 16) == 0) {
+			load_cert_file(image_handle, info->FileName, PathName);
+		}
+	}
+done:
+	FreePool(buffer);
+	FreePool(PathName);
+	return efi_status;
+}
+
+EFI_STATUS
 shim_init(void)
 {
 	EFI_STATUS efi_status;
+
 	dprint(L"%a", shim_version);
 
 	/* Set the second stage loader */
@@ -1444,17 +1643,10 @@ debug_hook(void)
 	register volatile UINTN x = 0;
 	extern char _text, _data;
 
-	const CHAR16 * const debug_var_name =
-#ifdef ENABLE_SHIM_DEVEL
-		L"SHIM_DEVEL_DEBUG";
-#else
-		L"SHIM_DEBUG";
-#endif
-
 	if (x)
 		return;
 
-	efi_status = get_variable(debug_var_name, &data, &dataSize,
+	efi_status = get_variable(DEBUG_VAR_NAME, &data, &dataSize,
 				  SHIM_LOCK_GUID);
 	if (EFI_ERROR(efi_status)) {
 		return;
@@ -1468,7 +1660,7 @@ debug_hook(void)
 
 	console_print(L"Pausing for debugger attachment.\n");
 	console_print(L"To disable this, remove the EFI variable %s-%g .\n",
-		      debug_var_name, &SHIM_LOCK_GUID);
+		      DEBUG_VAR_NAME, &SHIM_LOCK_GUID);
 	x = 1;
 	while (x++) {
 		/* Make this so it can't /totally/ DoS us. */
@@ -1531,7 +1723,6 @@ efi_main (EFI_HANDLE passed_image_handle, EFI_SYSTEM_TABLE *passed_systab)
 	vendor_deauthorized = (UINT8 *)&cert_table + cert_table.vendor_deauthorized_offset;
 
 #if defined(ENABLE_SHIM_CERT)
-	// dprint(L"[efi_main] enable_shim_cert\n");
 	build_cert_size = sizeof(shim_cert);
 	build_cert = shim_cert;
 #endif /* defined(ENABLE_SHIM_CERT) */
@@ -1601,7 +1792,7 @@ efi_main (EFI_HANDLE passed_image_handle, EFI_SYSTEM_TABLE *passed_systab)
 			goto die;
 		}
 
-		efi_status = handle_sbat(sbat_start, sbat_end - sbat_start - 1);
+		efi_status = verify_sbat_section(sbat_start, sbat_end - sbat_start - 1);
 		if (EFI_ERROR(efi_status)) {
 			perror(L"Verifiying shim SBAT data failed: %r\n",
 			       efi_status);
@@ -1612,6 +1803,14 @@ efi_main (EFI_HANDLE passed_image_handle, EFI_SYSTEM_TABLE *passed_systab)
 	}
 
 	init_openssl();
+
+	if (secure_mode()) {
+		efi_status = load_certs(global_image_handle);
+		if (EFI_ERROR(efi_status)) {
+			LogError(L"Failed to load addon certificates\n");
+		}
+	}
+
 	/*
 	 * Before we do anything else, validate our non-volatile,
 	 * boot-services-only state variables are what we think they are.
@@ -1653,7 +1852,7 @@ die:
 	 * Tell the user that we're in insecure mode if necessary
 	 */
 	if (user_insecure_mode) {
-	console_print(L"Booting in insecure mode\n");
+		console_print(L"Booting in insecure mode\n");
 		msleep(2000000);
 	}
 
@@ -1661,9 +1860,8 @@ die:
 	 * Hand over control to the second stage bootloader
 	 */
 	efi_status = init_grub(image_handle);
+
 	shim_fini();
-
 	devel_egress(EFI_ERROR(efi_status) ? EXIT_FAILURE : EXIT_SUCCESS);
-
 	return efi_status;
 }

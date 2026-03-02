@@ -536,7 +536,6 @@ no_event:
 static EFI_STATUS
 receive_http_response(EFI_HTTP_PROTOCOL *http, VOID **buffer, UINT64 *buf_size)
 {
-
 	EFI_HTTP_TOKEN rx_token;
 	EFI_HTTP_MESSAGE rx_message;
 	EFI_HTTP_RESPONSE_DATA response;

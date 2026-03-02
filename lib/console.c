@@ -122,6 +122,30 @@ console_print_at(UINTN col, UINTN row, const CHAR16 *fmt, ...)
 	return ret;
 }
 
+static struct {
+	CHAR16 up_left;
+	CHAR16 up_right;
+	CHAR16 down_left;
+	CHAR16 down_right;
+	CHAR16 horizontal;
+	CHAR16 vertical;
+} boxdraw[2] = {
+	{
+		BOXDRAW_UP_LEFT,
+		BOXDRAW_UP_RIGHT,
+		BOXDRAW_DOWN_LEFT,
+		BOXDRAW_DOWN_RIGHT,
+		BOXDRAW_HORIZONTAL,
+		BOXDRAW_VERTICAL
+	}, {
+		'+',
+		'+',
+		'+',
+		'+',
+		'-',
+		'|'
+	}
+};
 
 void
 console_print_box_at(CHAR16 *str_arr[], int highlight,
@@ -133,6 +157,7 @@ console_print_box_at(CHAR16 *str_arr[], int highlight,
 	SIMPLE_TEXT_OUTPUT_INTERFACE *co = ST->ConOut;
 	UINTN rows, cols;
 	CHAR16 *Line;
+	bool char_set;
 
 	if (lines == 0)
 		return;
@@ -181,10 +206,16 @@ console_print_box_at(CHAR16 *str_arr[], int highlight,
 		return;
 	}
 
-	SetMem16 (Line, size_cols * 2, BOXDRAW_HORIZONTAL);
+	/* test if boxdraw characters work */
+	co->SetCursorPosition(co, start_col, start_row);
+	Line[0] = boxdraw[0].up_left;
+	Line[1] = L'\0';
+	char_set = co->OutputString(co, Line) == 0 ? 0 : 1;
 
-	Line[0] = BOXDRAW_DOWN_RIGHT;
-	Line[size_cols - 1] = BOXDRAW_DOWN_LEFT;
+	SetMem16 (Line, size_cols * 2, boxdraw[char_set].horizontal);
+
+	Line[0] = boxdraw[char_set].down_right;
+	Line[size_cols - 1] = boxdraw[char_set].down_left;
 	Line[size_cols] = L'\0';
 	co->SetCursorPosition(co, start_col, start_row);
 	co->OutputString(co, Line);
@@ -204,8 +235,8 @@ console_print_box_at(CHAR16 *str_arr[], int highlight,
 		int line = i - start;
 
 		SetMem16 (Line, size_cols*2, L' ');
-		Line[0] = BOXDRAW_VERTICAL;
-		Line[size_cols - 1] = BOXDRAW_VERTICAL;
+		Line[0] = boxdraw[char_set].vertical;
+		Line[size_cols - 1] = boxdraw[char_set].vertical;
 		Line[size_cols] = L'\0';
 		if (line >= 0 && line < lines) {
 			CHAR16 *s = str_arr[line];
@@ -227,9 +258,9 @@ console_print_box_at(CHAR16 *str_arr[], int highlight,
 					       EFI_BACKGROUND_BLUE);
 
 	}
-	SetMem16 (Line, size_cols * 2, BOXDRAW_HORIZONTAL);
-	Line[0] = BOXDRAW_UP_RIGHT;
-	Line[size_cols - 1] = BOXDRAW_UP_LEFT;
+	SetMem16 (Line, size_cols * 2, boxdraw[char_set].horizontal);
+	Line[0] = boxdraw[char_set].up_right;
+	Line[size_cols - 1] = boxdraw[char_set].up_left;
 	Line[size_cols] = L'\0';
 	co->SetCursorPosition(co, start_col, i);
 	co->OutputString(co, Line);
@@ -250,12 +281,6 @@ console_print_box(CHAR16 *str_arr[], int highlight)
 
 	if (!co)
 		return;
-
-	/* Check if Mode pointer is valid before copying */
-	if (!co->Mode || (UINTN)co->Mode < 0x1000) {
-		console_print(L"[WARN] ConOut Mode invalid in print_box\n");
-		return;
-	}
 
 	CopyMem(&SavedConsoleMode, co->Mode, sizeof(SavedConsoleMode));
 	co->EnableCursor(co, FALSE);
@@ -292,12 +317,6 @@ console_select(CHAR16 *title[], CHAR16* selectors[], unsigned int start)
 
 	if (!co)
 		return -1;
-
-	/* Check if Mode pointer is valid */
-	if (!co->Mode || (UINTN)co->Mode < 0x1000) {
-		console_print(L"[ERROR] ConOut Mode is invalid: %p\n", co->Mode);
-		return -1;
-	}
 
 	co->QueryMode(co, co->Mode->Mode, &cols, &rows);
 
@@ -441,12 +460,6 @@ console_save_and_set_mode(SIMPLE_TEXT_OUTPUT_MODE * SavedMode)
 	if (!co)
 		return;
 
-	/* Check if Mode pointer is valid before copying */
-	if (!co->Mode || (UINTN)co->Mode < 0x1000) {
-		console_print(L"[WARN] ConOut Mode invalid, skipping save\n");
-		return;
-	}
-
 	CopyMem(SavedMode, co->Mode, sizeof(SIMPLE_TEXT_OUTPUT_MODE));
 	co->EnableCursor(co, FALSE);
 	co->SetAttribute(co, EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE);
@@ -540,7 +553,6 @@ console_mode_handle(VOID)
 
 	efi_status = BS->LocateProtocol(&gop_guid, NULL, (void **)&gop);
 	if (EFI_ERROR(efi_status)) {
-		console_error(L"Locate graphic output protocol fail", efi_status);
 		return;
 	}
 
@@ -720,7 +732,7 @@ setup_verbosity(VOID)
 	UINTN verbose_check_size;
 
 	verbose_check_size = sizeof(verbose);
-	efi_status = get_variable(L"SHIM_VERBOSE", &verbose_check_ptr,
+	efi_status = get_variable(VERBOSE_VAR_NAME, &verbose_check_ptr,
 				  &verbose_check_size, SHIM_LOCK_GUID);
 	if (!EFI_ERROR(efi_status)) {
 		verbose = *(__typeof__(verbose) *)verbose_check_ptr;

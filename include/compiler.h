@@ -47,7 +47,11 @@
 #define ALIAS(x) __attribute__((weak, alias (#x)))
 #endif
 #ifndef ALLOCFUNC
+#if defined(__COVERITY__)
+#define ALLOCFUNC(a, b)
+#else
 #define ALLOCFUNC(dealloc, dealloc_arg) __attribute__((__malloc__(dealloc, dealloc_arg)))
+#endif
 #endif
 #ifndef PRINTF
 #define PRINTF(first, args...) __attribute__((__format__(printf, first, ## args)))
@@ -187,6 +191,12 @@
  * Builtins that don't go in string.h
  */
 #define unreachable() __builtin_unreachable()
+
+#if defined(__GNUC__)
+#define cache_invalidate(begin, end)  __builtin___clear_cache(begin, end)
+#else /* __GNUC__ */
+#error shim has no cache_invalidate() implementation for this compiler
+#endif /* __GNUC__ */
 
 #endif /* !COMPILER_H_ */
 // vim:fenc=utf-8:tw=75:et
