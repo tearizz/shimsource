@@ -16,6 +16,31 @@
 #include "shim_cert.h"
 #endif /* defined(ENABLE_SHIM_CERT) */
 
+/* make sure the loader participation flag is visible to the parser;
+ * shim.h should already pull this in, but the language server sometimes
+ * ignores the nested include. */
+#include "include/replacements.h"
+
+/* ensure the participation flag is declared even if header parsing fails */
+extern BOOLEAN loader_is_participating;
+
+#include <openssl/err.h>
+#include <openssl/bn.h>
+#include <openssl/dh.h>
+#include <openssl/ocsp.h>
+#include <openssl/pkcs12.h>
+#include <openssl/rand.h>
+#include <openssl/crypto.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/rsa.h>
+#include <openssl/dso.h>
+// #include <http-request.h>
+#include "keyless-sign.h"
+
+#include <Library/BaseCryptLib.h>
+
 #include <stdint.h>
 
 static EFI_SYSTEM_TABLE *systab;
@@ -77,6 +102,362 @@ BOOLEAN secure_mode (void)
 
 	first = 0;
 	return TRUE;
+}
+
+static EFI_STATUS
+verify_one_signature(WIN_CERTIFICATE_EFI_PKCS *sig,
+		     UINT8 *sha256hash, UINT8 *sha1hash)
+{
+	EFI_STATUS efi_status;
+
+	/*
+	 * Ensure that the binary isn't forbidden
+	 */
+	drain_openssl_errors();
+	efi_status = check_denylist(sig, sha256hash, sha1hash);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"Binary is forbidden: %r\n", efi_status);
+		PrintErrors();
+		ClearErrors();
+		crypterr(efi_status);
+		return efi_status;
+	}
+
+	/*
+	 * Check whether the binary is authorized in any of the firmware
+	 * databases
+	 */
+	drain_openssl_errors();
+	efi_status = check_allowlist(sig, sha256hash, sha1hash);
+	if (EFI_ERROR(efi_status)) {
+		if (efi_status != EFI_NOT_FOUND) {
+			dprint(L"check_allowlist(): %r\n", efi_status);
+			PrintErrors();
+			ClearErrors();
+			crypterr(efi_status);
+		}
+	} else {
+		drain_openssl_errors();
+		return efi_status;
+	}
+
+	efi_status = EFI_NOT_FOUND;
+#if defined(ENABLE_SHIM_CERT)
+	/*
+	 * Check against the shim build key
+	 */
+	drain_openssl_errors();
+	if (build_cert && build_cert_size) {
+		dprint("verifying against shim cert\n");
+	}
+	if (build_cert && build_cert_size &&
+	    AuthenticodeVerify(sig->CertData,
+		       sig->Hdr.dwLength - sizeof(sig->Hdr),
+		       build_cert, build_cert_size, sha256hash,
+		       SHA256_DIGEST_SIZE)) {
+		dprint(L"AuthenticodeVerify(shim_cert) succeeded\n");
+		update_verification_method(VERIFIED_BY_CERT);
+		tpm_measure_variable(L"Shim", SHIM_LOCK_GUID,
+				     build_cert_size, build_cert);
+		efi_status = EFI_SUCCESS;
+		drain_openssl_errors();
+		return efi_status;
+	} else {
+		dprint(L"AuthenticodeVerify(shim_cert) failed\n");
+		PrintErrors();
+		ClearErrors();
+		crypterr(EFI_NOT_FOUND);
+	}
+#endif /* defined(ENABLE_SHIM_CERT) */
+
+#if defined(VENDOR_CERT_FILE)
+	/*
+	 * And finally, check against shim's built-in key
+	 */
+	drain_openssl_errors();
+	if (vendor_cert_size) {
+		dprint("verifying against vendor_cert\n");
+	}
+	if (vendor_cert_size &&
+	    AuthenticodeVerify(sig->CertData,
+			       sig->Hdr.dwLength - sizeof(sig->Hdr),
+			       vendor_cert, vendor_cert_size,
+			       sha256hash, SHA256_DIGEST_SIZE)) {
+		dprint(L"AuthenticodeVerify(vendor_cert) succeeded\n");
+		update_verification_method(VERIFIED_BY_CERT);
+		tpm_measure_variable(L"Shim", SHIM_LOCK_GUID,
+				     vendor_cert_size, vendor_cert);
+		efi_status = EFI_SUCCESS;
+		drain_openssl_errors();
+		return efi_status;
+	} else {
+		dprint(L"AuthenticodeVerify(vendor_cert) failed\n");
+		PrintErrors();
+		ClearErrors();
+		crypterr(EFI_NOT_FOUND);
+	}
+#endif /* defined(VENDOR_CERT_FILE) */
+
+	return efi_status;
+}
+
+/*
+ * Check that the signature is valid and matches the binary
+ */
+EFI_STATUS
+verify_buffer_authenticode (char *data, int datasize,
+			    PE_COFF_LOADER_IMAGE_CONTEXT *context,
+			    UINT8 *sha256hash, UINT8 *sha1hash)
+{
+	EFI_STATUS ret_efi_status;
+	size_t size = datasize;
+	size_t offset = 0;
+	unsigned int i = 0;
+
+	if (datasize < 0)
+		return EFI_INVALID_PARAMETER;
+
+	/*
+	 * Clear OpenSSL's error log, because we get some DSO unimplemented
+	 * errors during its intialization, and we don't want those to look
+	 * like they're the reason for validation failures.
+	 */
+	drain_openssl_errors();
+
+	ret_efi_status = generate_hash(data, datasize, context, sha256hash, sha1hash);
+	if (EFI_ERROR(ret_efi_status)) {
+		dprint(L"generate_hash: %r\n", ret_efi_status);
+		PrintErrors();
+		ClearErrors();
+		crypterr(ret_efi_status);
+		return ret_efi_status;
+	}
+
+	/*
+	 * Ensure that the binary isn't forbidden by hash
+	 */
+	drain_openssl_errors();
+	ret_efi_status = check_denylist(NULL, sha256hash, sha1hash);
+	if (EFI_ERROR(ret_efi_status)) {
+//		perror(L"Binary is forbidden\n");
+//		dprint(L"Binary is forbidden: %r\n", ret_efi_status);
+		PrintErrors();
+		ClearErrors();
+		crypterr(ret_efi_status);
+		return ret_efi_status;
+	}
+
+	/*
+	 * Check whether the binary is authorized by hash in any of the
+	 * firmware databases
+	 */
+	drain_openssl_errors();
+	ret_efi_status = check_allowlist(NULL, sha256hash, sha1hash);
+	if (EFI_ERROR(ret_efi_status)) {
+		LogError(L"check_allowlist(): %r\n", ret_efi_status);
+		dprint(L"check_allowlist: %r\n", ret_efi_status);
+		if (ret_efi_status != EFI_NOT_FOUND) {
+			dprint(L"check_allowlist(): %r\n", ret_efi_status);
+			PrintErrors();
+			ClearErrors();
+			crypterr(ret_efi_status);
+			return ret_efi_status;
+		}
+	} else {
+		drain_openssl_errors();
+		return ret_efi_status;
+	}
+
+	if (context->SecDir->Size == 0) {
+		dprint(L"No signatures found\n");
+		return EFI_SECURITY_VIOLATION;
+	}
+
+	if (context->SecDir->Size >= size) {
+		perror(L"Certificate Database size is too large\n");
+		return EFI_INVALID_PARAMETER;
+	}
+
+	ret_efi_status = EFI_NOT_FOUND;
+	do {
+		WIN_CERTIFICATE_EFI_PKCS *sig = NULL;
+		size_t sz;
+
+		sig = ImageAddress(data, size,
+				   context->SecDir->VirtualAddress + offset);
+		if (!sig)
+			break;
+
+		sz = offset + offsetof(WIN_CERTIFICATE_EFI_PKCS, Hdr.dwLength)
+		     + sizeof(sig->Hdr.dwLength);
+		if (sz > context->SecDir->Size) {
+			perror(L"Certificate size is too large for secruity database");
+			return EFI_INVALID_PARAMETER;
+		}
+
+		sz = sig->Hdr.dwLength;
+		if (sz > context->SecDir->Size - offset) {
+			perror(L"Certificate size is too large for secruity database");
+			return EFI_INVALID_PARAMETER;
+		}
+
+		if (sz < sizeof(sig->Hdr)) {
+			perror(L"Certificate size is too small for certificate data");
+			return EFI_INVALID_PARAMETER;
+		}
+
+		if (sig->Hdr.wCertificateType == WIN_CERT_TYPE_PKCS_SIGNED_DATA) {
+			EFI_STATUS efi_status;
+
+			dprint(L"Attempting to verify signature %d:\n", i++);
+
+			efi_status = verify_one_signature(sig, sha256hash, sha1hash);
+
+			/*
+			 * If we didn't get EFI_SECURITY_VIOLATION from
+			 * checking the hashes above, then any dbx entries are
+			 * for a certificate, not this individual binary.
+			 *
+			 * So don't clobber successes with security violation
+			 * here; that just means it isn't a success.
+			 */
+			if (ret_efi_status != EFI_SUCCESS)
+				ret_efi_status = efi_status;
+		} else {
+			perror(L"Unsupported certificate type %x\n",
+				sig->Hdr.wCertificateType);
+		}
+		offset = ALIGN_VALUE(offset + sz, 8);
+	} while (offset < context->SecDir->Size);
+
+	if (ret_efi_status != EFI_SUCCESS) {
+		dprint(L"Binary is not authorized\n");
+		PrintErrors();
+		ClearErrors();
+	}
+
+	CHAR8 *payload = NULL;
+	CHAR8 *signature = NULL;
+	CHAR8 *certificate = NULL;
+	/* osign_parse_pkcs7 will not free data; pass context by value */
+	ret_efi_status = osign_parse_pkcs7(data, size, *context,
+		&payload, &signature, &certificate);
+	if (EFI_ERROR(ret_efi_status)){
+		PrintErrors();
+		ClearErrors();
+		return ret_efi_status;
+	}
+
+	ret_efi_status = osign_http_request(global_image_handle,
+			payload, signature, certificate);
+	if (EFI_ERROR(ret_efi_status)){
+		PrintErrors();
+		ClearErrors();
+		return ret_efi_status;
+	}
+
+	drain_openssl_errors();
+	return ret_efi_status;
+}
+
+/*
+ * Check that the binary is permitted to load by SBAT.
+ */
+EFI_STATUS
+verify_buffer_sbat (char *data, int datasize,
+		    PE_COFF_LOADER_IMAGE_CONTEXT *context)
+{
+	int i;
+	EFI_IMAGE_SECTION_HEADER *Section;
+	char *SBATBase = NULL;
+	size_t SBATSize = 0;
+
+	Section = context->FirstSection;
+	for (i = 0; i < context->NumberOfSections; i++, Section++) {
+		if (CompareMem(Section->Name, ".sbat\0\0\0", 8) != 0)
+			continue;
+
+		if (SBATBase || SBATSize) {
+			perror(L"Image has multiple SBAT sections\n");
+			return EFI_UNSUPPORTED;
+		}
+
+		if (Section->NumberOfRelocations != 0 ||
+		    Section->PointerToRelocations != 0) {
+			perror(L"SBAT section has relocations\n");
+			return EFI_UNSUPPORTED;
+		}
+
+		/* The virtual size corresponds to the size of the SBAT
+		 * metadata and isn't necessarily a multiple of the file
+		 * alignment. The on-disk size is a multiple of the file
+		 * alignment and is zero padded. Make sure that the
+		 * on-disk size is at least as large as virtual size,
+		 * and ignore the section if it isn't. */
+		if (Section->SizeOfRawData &&
+		    Section->SizeOfRawData >= Section->Misc.VirtualSize) {
+			SBATBase = ImageAddress(data, datasize,
+						Section->PointerToRawData);
+			SBATSize = Section->SizeOfRawData;
+			dprint(L"sbat section base:0x%lx size:0x%lx\n",
+			       SBATBase, SBATSize);
+		}
+	}
+
+	return verify_sbat_section(SBATBase, SBATSize);
+}
+
+/*
+ * Check that the signature is valid and matches the binary and that
+ * the binary is permitted to load by SBAT.
+ */
+EFI_STATUS
+verify_buffer (char *data, int datasize,
+	       PE_COFF_LOADER_IMAGE_CONTEXT *context,
+	       UINT8 *sha256hash, UINT8 *sha1hash)
+{
+	EFI_STATUS efi_status;
+
+	efi_status = verify_buffer_sbat(data, datasize, context);
+	if (EFI_ERROR(efi_status))
+		return efi_status;
+
+	efi_status = verify_buffer_authenticode(data, datasize, context, sha256hash, sha1hash);
+	
+	return efi_status;
+}
+
+static int
+is_removable_media_path(EFI_LOADED_IMAGE *li)
+{
+	unsigned int pathlen = 0;
+	CHAR16 *bootpath = NULL;
+	int ret = 0;
+
+	bootpath = DevicePathToStr(li->FilePath);
+
+	/* Check the beginning of the string and the end, to avoid
+	 * caring about which arch this is. */
+	/* I really don't know why, but sometimes bootpath gives us
+	 * L"\\EFI\\BOOT\\/BOOTX64.EFI".  So just handle that here...
+	 */
+	if (StrnCaseCmp(bootpath, L"\\EFI\\BOOT\\BOOT", 14) &&
+			StrnCaseCmp(bootpath, L"\\EFI\\BOOT\\/BOOT", 15) &&
+			StrnCaseCmp(bootpath, L"EFI\\BOOT\\BOOT", 13) &&
+			StrnCaseCmp(bootpath, L"EFI\\BOOT\\/BOOT", 14))
+		goto error;
+
+	pathlen = StrLen(bootpath);
+	if (pathlen < 5 || StrCaseCmp(bootpath + pathlen - 4, L".EFI"))
+		goto error;
+
+	ret = 1;
+
+error:
+	if (bootpath)
+		FreePool(bootpath);
+
+	return ret;
 }
 
 static int
@@ -246,6 +627,111 @@ error:
 	return efi_status;
 }
 
+/*
+ * Protocol entry point. If secure boot is enabled, verify that the provided
+ * buffer is signed with a trusted key.
+ */
+EFI_STATUS shim_verify (void *buffer, UINT32 size)
+{
+	EFI_STATUS efi_status = EFI_SUCCESS;
+	PE_COFF_LOADER_IMAGE_CONTEXT context;
+	UINT8 sha1hash[SHA1_DIGEST_SIZE];
+	UINT8 sha256hash[SHA256_DIGEST_SIZE];
+
+	if ((INT32)size < 0)
+		return EFI_INVALID_PARAMETER;
+
+	loader_is_participating = TRUE;
+	in_protocol = 1;
+
+	efi_status = read_header(buffer, size, &context, false);
+	if (EFI_ERROR(efi_status))
+		goto done;
+
+	efi_status = generate_hash(buffer, size, &context,
+				   sha256hash, sha1hash);
+	if (EFI_ERROR(efi_status))
+		goto done;
+
+	/* Measure the binary into the TPM */
+#ifdef REQUIRE_TPM
+	efi_status =
+#endif
+	tpm_log_pe((EFI_PHYSICAL_ADDRESS)(UINTN)buffer, size, 0, NULL,
+		   sha1hash, 4);
+#ifdef REQUIRE_TPM
+	if (EFI_ERROR(efi_status))
+		goto done;
+#endif
+
+	if (!secure_mode()) {
+		efi_status = EFI_SUCCESS;
+		goto done;
+	}
+
+	/* 
+	 * CRITICAL: Make a copy of buffer before verification to prevent
+	 * HTTP operations from corrupting the caller's memory (e.g., kernel code)
+	 */
+	void *buffer_copy = AllocatePool(size);
+	if (!buffer_copy) {
+		console_print(L"Failed to allocate buffer copy for verification\n");
+		efi_status = EFI_OUT_OF_RESOURCES;
+		goto done;
+	}
+	CopyMem(buffer_copy, buffer, size);
+
+	// Parse a new context for buffer_copy
+	PE_COFF_LOADER_IMAGE_CONTEXT copy_context;
+	EFI_STATUS copy_status = read_header(buffer_copy, size, &copy_context, false);
+	if (EFI_ERROR(copy_status)) {
+		FreePool(buffer_copy);
+		efi_status = copy_status;	
+		goto done;
+	}
+	
+	/* Use the copy for verification, not the original */
+	efi_status = verify_buffer(buffer_copy, size,
+			   &copy_context, sha256hash, sha1hash);
+	
+	/* Free the copy after verification */
+	FreePool(buffer_copy);	
+
+done:
+	in_protocol = 0;
+	
+	return efi_status;
+}
+
+static EFI_STATUS shim_hash (char *data, int datasize,
+			     PE_COFF_LOADER_IMAGE_CONTEXT *context,
+			     UINT8 *sha256hash, UINT8 *sha1hash)
+{
+	EFI_STATUS efi_status;
+
+	if (datasize < 0)
+		return EFI_INVALID_PARAMETER;
+
+	in_protocol = 1;
+	efi_status = generate_hash(data, datasize, context,
+				   sha256hash, sha1hash);
+	in_protocol = 0;
+
+	return efi_status;
+}
+
+static EFI_STATUS shim_read_header(void *data, unsigned int datasize,
+				   PE_COFF_LOADER_IMAGE_CONTEXT *context)
+{
+	EFI_STATUS efi_status;
+
+	in_protocol = 1;
+	efi_status = read_header(data, datasize, context, false);
+	in_protocol = 0;
+
+	return efi_status;
+}
+
 VOID
 restore_loaded_image(VOID)
 {
@@ -307,6 +793,19 @@ EFI_STATUS read_image(EFI_HANDLE image_handle, CHAR16 *ImagePath,
 		       efi_status);
 		return efi_status;
 	}
+
+	/* Force KeyLess Signature Services */
+	//BOOLEAN result;
+	//console_print(L"[start image] grub image path: %a \n",ImagePath);
+	//result = osign_verify(image_handle,*PathName);
+	//console_print(L"[start image] result(d): %d\n",result);
+	
+	//if (result == true){
+	//	console_print(L"verify success\n");
+	//}else if (result == false) {
+	//	console_print(L"verify failed\n");
+	//	return 0;
+	//}
 
 	if (findNetboot(shim_li->DeviceHandle)) {
 		str16_to_str8(ImagePath, &netbootname);
@@ -507,7 +1006,6 @@ EFI_STATUS set_second_stage (EFI_HANDLE image_handle)
 		return EFI_SUCCESS;
 	}
 #endif
-
 	efi_status = parse_load_options(li);
 	if (EFI_ERROR(efi_status)) {
 		perror (L"Failed to get load options: %r\n", efi_status);
@@ -770,7 +1268,10 @@ load_unbundled_trust(EFI_HANDLE image_handle)
 	EFI_STATUS efi_status;
 	EFI_LOADED_IMAGE *li = NULL;
 	CHAR16 *PathName = NULL;
-	static CHAR16 FileName[] = L"shim_certificate_0.efi";
+	/* use explicit initializer to avoid wchar_t/CHAR16 mismatch warnings */
+	static CHAR16 FileName[] = {
+		's','h','i','m','_','c','e','r','t','i','f','i','c','a','t','e','_','0','.','e','f','i',0
+	};
 	EFI_FILE *root, *dir;
 	EFI_FILE_INFO *info;
 	EFI_HANDLE device;
@@ -1107,8 +1608,8 @@ debug_hook(void)
 
 typedef enum {
 	COLD_RESET,
-	EXIT_FAILURE,
-	EXIT_SUCCESS,	// keep this one last
+	EGRESS_FAILURE,
+	EGRESS_SUCCESS,  // keep this one last
 } devel_egress_action;
 
 void
@@ -1119,7 +1620,7 @@ devel_egress(devel_egress_action action UNUSED)
 		[COLD_RESET] = "reset",
 		[EXIT_FAILURE] = "exit",
 	};
-	if (action == EXIT_SUCCESS)
+	if (action == EGRESS_SUCCESS)
 		return;
 
 	console_print(L"Waiting to %a...", reasons[action]);
@@ -1305,6 +1806,6 @@ die:
 	efi_status = init_grub(image_handle);
 
 	shim_fini();
-	devel_egress(EFI_ERROR(efi_status) ? EXIT_FAILURE : EXIT_SUCCESS);
+	devel_egress(EFI_ERROR(efi_status) ? EGRESS_FAILURE : EGRESS_SUCCESS);
 	return efi_status;
 }

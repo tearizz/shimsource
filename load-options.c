@@ -458,7 +458,6 @@ parse_load_options(EFI_LOADED_IMAGE *li)
 
 	loader_str = split_load_options(li->LoadOptions, li->LoadOptionsSize,
 					&remaining, &remaining_size);
-
 	/*
 	 * Set up the name of the alternative loader and the LoadOptions for
 	 * the loader if it's not the empty string.

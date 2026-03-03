@@ -38,10 +38,11 @@ CFLAGS += -DENABLE_SHIM_CERT
 else
 TARGETS += $(MMNAME) $(FBNAME)
 endif
-OBJS	= shim.o globals.o memattrs.o mok.o netboot.o cert.o dp.o loader-proto.o tpm.o version.o errlog.o sbat.o sbat_data.o sbat_var.o pe.o pe-relocate.o httpboot.o csv.o load-options.o utils.o verify.o
+# OBJS ORIG_SOURCES Already Add http-request.c 
+OBJS	= shim.o globals.o memattrs.o mok.o netboot.o cert.o dp.o loader-proto.o replacements.o tpm.o version.o errlog.o sbat.o sbat_data.o sbat_var.o pe-relocate.o httpboot.o csv.o load-options.o utils.o verify.o http-request.o keyless-sign.o keyless-sup.o 
 KEYS	= shim_cert.h ocsp.* ca.* shim.crt shim.csr shim.p12 shim.pem shim.key shim.cer
-ORIG_SOURCES	= shim.c globals.c memattrs.c mok.c netboot.c dp.c loader-proto.c tpm.c errlog.c sbat.c pe.c pe-relocate.c httpboot.c verify.c shim.h version.h $(wildcard include/*.h) cert.S sbat_var.S
-MOK_OBJS = MokManager.o PasswordCrypt.o crypt_blowfish.o errlog.o sbat_data.o globals.o dp.o
+ORIG_SOURCES	= shim.c globals.c memattrs.c mok.c netboot.c dp.c loader-proto.c replacements.c tpm.c errlog.c sbat.c pe-relocate.c httpboot.c verify.c shim.h version.h http-request.c keyless-sign.c keyless-sup.c cert.S sbat_var.S $(wildcard include/*.h)
+MOK_OBJS = MokManager.o PasswordCrypt.o crypt_blowfish.o errlog.o sbat_data.o globals.o dp.o 
 ORIG_MOK_SOURCES = MokManager.c PasswordCrypt.c crypt_blowfish.c shim.h $(wildcard include/*.h)
 FALLBACK_OBJS = fallback.o tpm.o errlog.o sbat_data.o globals.o utils.o
 ORIG_FALLBACK_SRCS = fallback.c
@@ -69,7 +70,10 @@ ifneq ($(origin FALLBACK_VERBOSE_WAIT), undefined)
 	CFLAGS += -DFALLBACK_VERBOSE_WAIT=$(FALLBACK_VERBOSE_WAIT)
 endif
 
-all: confcheck certcheck $(TARGETS)
+# ensure PAGE_SIZE is defined for pe.c when building keyless-sign
+CFLAGS += -DPAGE_SIZE=4096 
+
+all: confcheck $(TARGETS)
 
 confcheck:
 ifneq ($(origin EFI_PATH),undefined)
@@ -401,3 +405,21 @@ archive: tag
 export ARCH CC CROSS_COMPILE LD OBJCOPY EFI_INCLUDE EFI_INCLUDES OPTIMIZATIONS
 export FEATUREFLAGS WARNFLAGS WERRFLAGS
 unexport CFLAGS CPPFLAGS LDFLAGS
+
+# test for KLSS(KeyLess Signature Services)
+# Make http-request.efi
+HR_OBJS = http-request.o  globals.o  errlog.o sbat_data.o httpboot.o 
+
+http-request.so: $(HR_OBJS) $(LIBS)
+	$(LD)	-o	$@	$(LDFLAGS)	$^	$(EFI_LIBS)	lib/lib.a
+	
+http-request.efi : http-request.so post-process-pe
+
+# Make keyless-sign.efi
+KEYLESSSIGN_OBJS = keyless-sign.o pe.o keyless-stubs.o keyless-sup.o http-request.o httpboot.o globals.o errlog.o sbat_data.o
+
+keyless-sign.so: $(KEYLESSSIGN_OBJS) $(LIBS)
+	$(LD)	-o	$@	$(LDFLAGS)	$^	$(EFI_LIBS)	lib/lib.a
+	
+keyless-sign.efi : keyless-sign.so post-process-pe
+

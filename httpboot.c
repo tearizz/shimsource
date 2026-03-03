@@ -9,6 +9,9 @@
  */
 #include "shim.h"
 
+extern EFI_HTTP_METHOD http_request_method;
+extern CHAR8 *tx_body_json;
+
 static UINTN
 ascii_to_int (CONST CHAR8 *str)
 {
@@ -483,33 +486,54 @@ send_http_request (EFI_HTTP_PROTOCOL *http, CHAR8 *hostname, CHAR8 *uri)
 	EFI_HTTP_TOKEN tx_token;
 	EFI_HTTP_MESSAGE tx_message;
 	EFI_HTTP_REQUEST_DATA request;
-	EFI_HTTP_HEADER headers[3];
+	EFI_HTTP_HEADER headers[7];
 	BOOLEAN request_done;
 	CHAR16 *Url = NULL;
 	EFI_STATUS efi_status;
 	EFI_STATUS event_status;
+	CHAR8 content_length[16];
 
 	/* Convert the ascii string to the UCS2 string */
 	Url = PoolPrint(L"%a", uri);
 	if (!Url)
 		return EFI_OUT_OF_RESOURCES;
 
-	request.Method = HttpMethodGet;
+	request.Method = http_request_method;
 	request.Url = Url;
 
-	/* Prepare the HTTP headers */
-	headers[0].FieldName = (CHAR8 *)"Host";
+	headers[0].FieldName  = (CHAR8 *)"Host";
 	headers[0].FieldValue = hostname;
-	headers[1].FieldName = (CHAR8 *)"Accept";
-	headers[1].FieldValue = (CHAR8 *)"*/*";
-	headers[2].FieldName = (CHAR8 *)"User-Agent";
-	headers[2].FieldValue = (CHAR8 *)"UefiHttpBoot/1.0";
+	headers[1].FieldName  = (CHAR8 *)"Accept";
+	headers[1].FieldValue = "*/*";
+	headers[2].FieldName  = "User-Agent";
+	headers[2].FieldValue = "UefiHttpBoot/1.0";
 
-	tx_message.Data.Request = &request;
-	tx_message.HeaderCount = 3;
-	tx_message.Headers = headers;
+	tx_message.HeaderCount = 3;  	
 	tx_message.BodyLength = 0;
 	tx_message.Body = NULL;
+
+	if(http_request_method == HttpMethodPost){
+		
+		AsciiSPrint(content_length,sizeof(content_length),"%d",AsciiStrLen(tx_body_json));
+		
+		headers[3].FieldName  = (CHAR8 *)"Content-Type";
+		headers[3].FieldValue = (CHAR8 *)"application/json";
+		headers[4].FieldName  = (CHAR8 *)"Content-Length";
+		headers[4].FieldValue = (CHAR8 *)content_length;
+
+		headers[5].FieldName  = (CHAR8 *)"Accept-Encoding";
+		headers[5].FieldValue = (CHAR8 *)"gzip,deflate,br";
+		headers[6].FieldName  = (CHAR8 *)"Connection";
+		headers[6].FieldValue = (CHAR8 *)"keep-alive";
+		
+		tx_message.HeaderCount = 7;  	// Change for POST
+		tx_message.BodyLength = AsciiStrLen(tx_body_json);
+		tx_message.Body = (VOID *)tx_body_json;
+		
+	}
+	
+	tx_message.Data.Request = &request;
+	tx_message.Headers = headers;	// Change for POST
 
 	tx_token.Status = EFI_NOT_READY;
 	tx_token.Message = &tx_message;
@@ -839,3 +863,34 @@ error:
 
 	return efi_status;
 }
+
+EFI_STATUS
+httpboot_fetch_buffer_uri(EFI_HANDLE image, EFI_HANDLE nic_handle,
+                          CHAR8 *user_uri, VOID **buffer, UINT64 *buf_size)
+{
+	EFI_STATUS efi_status;
+	CHAR8 *hostname = NULL;
+
+	if (!user_uri)
+		return EFI_NOT_READY;
+
+	/* Extract the hostname (or IP) from URI */
+	efi_status = extract_hostname(user_uri, &hostname);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"hostname: %a, %r\n", hostname, efi_status);
+		goto error;
+	}
+
+	/* Use HTTP protocl to fetch the remote file */
+	efi_status = http_fetch(image, nic_handle, hostname, user_uri, is_ip6,
+	                        buffer, buf_size);
+	if (EFI_ERROR(efi_status)) {
+		perror(L"Failed to fetch image: %r\n", efi_status);
+		goto error;
+	}
+
+error:
+	user_uri = NULL;
+	return efi_status;
+}
+

@@ -60,3 +60,5 @@ version.c
 /mkosi/mkosi.cache/
 /mkosi/mkosi.local.conf
 /mkosi/mkosi.output/
+gnu-efi/.gitattributes
+gnu-efi/.gitignore
