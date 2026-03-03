@@ -132,7 +132,7 @@ wait_until_get_iface_info(EFI_IP4_CONFIG2_PROTOCOL *ip4_cfg2_protocol,
 	EFI_IP4_CONFIG2_INTERFACE_INFO *ip4_cfg2_iface_info = NULL;
 	for (int i = 0; i < 30; i++) {
 		console_print(L".");
-		msleep(1000000);
+		usleep(1000000000);
 		efi_status = ip4_cfg2_get_data(ip4_cfg2_protocol,
 		                               Ip4Config2DataTypeInterfaceInfo,
 		                               (void **)&ip4_cfg2_iface_info);
