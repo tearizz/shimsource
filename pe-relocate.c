@@ -5,6 +5,7 @@
  */
 
 #include "shim.h"
+#include <Library/BaseCryptLib.h>
 
 struct shim_section_cache_entry {
 	EFI_HANDLE parent_image_handle;

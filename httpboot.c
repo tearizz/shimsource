@@ -504,9 +504,9 @@ send_http_request (EFI_HTTP_PROTOCOL *http, CHAR8 *hostname, CHAR8 *uri)
 	headers[0].FieldName  = (CHAR8 *)"Host";
 	headers[0].FieldValue = hostname;
 	headers[1].FieldName  = (CHAR8 *)"Accept";
-	headers[1].FieldValue = "*/*";
-	headers[2].FieldName  = "User-Agent";
-	headers[2].FieldValue = "UefiHttpBoot/1.0";
+	headers[1].FieldValue = (CHAR8 *)"*/*";
+	headers[2].FieldName  = (CHAR8 *)"User-Agent";
+	headers[2].FieldValue = (CHAR8 *)"UefiHttpBoot/1.0";
 
 	tx_message.HeaderCount = 3;  	
 	tx_message.BodyLength = 0;
@@ -514,7 +514,7 @@ send_http_request (EFI_HTTP_PROTOCOL *http, CHAR8 *hostname, CHAR8 *uri)
 
 	if(http_request_method == HttpMethodPost){
 		
-		AsciiSPrint(content_length,sizeof(content_length),"%d",AsciiStrLen(tx_body_json));
+		AsciiSPrint(content_length,sizeof(content_length),(CONST CHAR8 *)"%d",(UINT32)AsciiStrLen((CONST char *)tx_body_json));
 		
 		headers[3].FieldName  = (CHAR8 *)"Content-Type";
 		headers[3].FieldValue = (CHAR8 *)"application/json";
@@ -527,7 +527,7 @@ send_http_request (EFI_HTTP_PROTOCOL *http, CHAR8 *hostname, CHAR8 *uri)
 		headers[6].FieldValue = (CHAR8 *)"keep-alive";
 		
 		tx_message.HeaderCount = 7;  	// Change for POST
-		tx_message.BodyLength = AsciiStrLen(tx_body_json);
+		tx_message.BodyLength = AsciiStrLen((CONST char *)tx_body_json);
 		tx_message.Body = (VOID *)tx_body_json;
 		
 	}
