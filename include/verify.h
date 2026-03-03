@@ -19,6 +19,20 @@ verify_buffer (char *data, int datasize,
 void
 init_openssl(void);
 
+void
+drain_openssl_errors(void);
+
+EFI_STATUS
+check_denylist(WIN_CERTIFICATE_EFI_PKCS *cert, UINT8 *sha256hash,
+               UINT8 *sha1hash);
+
+EFI_STATUS
+check_allowlist(WIN_CERTIFICATE_EFI_PKCS *cert, UINT8 *sha256hash,
+                UINT8 *sha1hash);
+
+void
+update_verification_method(verification_method_t method);
+
 /*
  * Protocol v1 entry points.
  */

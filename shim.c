@@ -204,7 +204,7 @@ verify_one_signature(WIN_CERTIFICATE_EFI_PKCS *sig,
 /*
  * Check that the signature is valid and matches the binary
  */
-EFI_STATUS
+static EFI_STATUS
 verify_buffer_authenticode (char *data, int datasize,
 			    PE_COFF_LOADER_IMAGE_CONTEXT *context,
 			    UINT8 *sha256hash, UINT8 *sha1hash)
@@ -363,7 +363,7 @@ verify_buffer_authenticode (char *data, int datasize,
 /*
  * Check that the binary is permitted to load by SBAT.
  */
-EFI_STATUS
+static EFI_STATUS
 verify_buffer_sbat (char *data, int datasize,
 		    PE_COFF_LOADER_IMAGE_CONTEXT *context)
 {
@@ -414,7 +414,7 @@ verify_buffer_sbat (char *data, int datasize,
 EFI_STATUS
 verify_buffer (char *data, int datasize,
 	       PE_COFF_LOADER_IMAGE_CONTEXT *context,
-	       UINT8 *sha256hash, UINT8 *sha1hash)
+	       UINT8 *sha256hash, UINT8 *sha1hash, bool parent_verified UNUSED)
 {
 	EFI_STATUS efi_status;
 
@@ -425,39 +425,6 @@ verify_buffer (char *data, int datasize,
 	efi_status = verify_buffer_authenticode(data, datasize, context, sha256hash, sha1hash);
 	
 	return efi_status;
-}
-
-static int
-is_removable_media_path(EFI_LOADED_IMAGE *li)
-{
-	unsigned int pathlen = 0;
-	CHAR16 *bootpath = NULL;
-	int ret = 0;
-
-	bootpath = DevicePathToStr(li->FilePath);
-
-	/* Check the beginning of the string and the end, to avoid
-	 * caring about which arch this is. */
-	/* I really don't know why, but sometimes bootpath gives us
-	 * L"\\EFI\\BOOT\\/BOOTX64.EFI".  So just handle that here...
-	 */
-	if (StrnCaseCmp(bootpath, L"\\EFI\\BOOT\\BOOT", 14) &&
-			StrnCaseCmp(bootpath, L"\\EFI\\BOOT\\/BOOT", 15) &&
-			StrnCaseCmp(bootpath, L"EFI\\BOOT\\BOOT", 13) &&
-			StrnCaseCmp(bootpath, L"EFI\\BOOT\\/BOOT", 14))
-		goto error;
-
-	pathlen = StrLen(bootpath);
-	if (pathlen < 5 || StrCaseCmp(bootpath + pathlen - 4, L".EFI"))
-		goto error;
-
-	ret = 1;
-
-error:
-	if (bootpath)
-		FreePool(bootpath);
-
-	return ret;
 }
 
 static int
@@ -692,7 +659,7 @@ EFI_STATUS shim_verify (void *buffer, UINT32 size)
 	
 	/* Use the copy for verification, not the original */
 	efi_status = verify_buffer(buffer_copy, size,
-			   &copy_context, sha256hash, sha1hash);
+			   &copy_context, sha256hash, sha1hash, false);
 	
 	/* Free the copy after verification */
 	FreePool(buffer_copy);	
@@ -703,9 +670,9 @@ done:
 	return efi_status;
 }
 
-static EFI_STATUS shim_hash (char *data, int datasize,
-			     PE_COFF_LOADER_IMAGE_CONTEXT *context,
-			     UINT8 *sha256hash, UINT8 *sha1hash)
+EFI_STATUS shim_hash (char *data, int datasize,
+		       PE_COFF_LOADER_IMAGE_CONTEXT *context,
+		       UINT8 *sha256hash, UINT8 *sha1hash)
 {
 	EFI_STATUS efi_status;
 
@@ -720,8 +687,8 @@ static EFI_STATUS shim_hash (char *data, int datasize,
 	return efi_status;
 }
 
-static EFI_STATUS shim_read_header(void *data, unsigned int datasize,
-				   PE_COFF_LOADER_IMAGE_CONTEXT *context)
+EFI_STATUS shim_read_header(void *data, unsigned int datasize,
+			    PE_COFF_LOADER_IMAGE_CONTEXT *context)
 {
 	EFI_STATUS efi_status;
 
