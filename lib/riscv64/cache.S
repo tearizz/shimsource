@@ -6,5 +6,5 @@
 GCC_ASM_EXPORT(__riscv_flush_icache)
 
 ASM_PFX(__riscv_flush_icache):
-       fence.i
+       .word 0x0100000f
        ret

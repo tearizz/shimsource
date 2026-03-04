@@ -60,7 +60,7 @@ init_openssl(void)
 	ERR_load_OCSP_strings();
 }
 
-static void
+void
 drain_openssl_errors(void)
 {
 	unsigned long err = -1;
@@ -276,7 +276,7 @@ check_db_hash(CHAR16 *dbname, EFI_GUID guid, UINT8 *data, int SignatureSize,
  * Check whether the binary signature or hash are present in dbx or the
  * built-in denylist
  */
-static EFI_STATUS
+EFI_STATUS
 check_denylist(WIN_CERTIFICATE_EFI_PKCS *cert, UINT8 *sha256hash,
                UINT8 *sha1hash)
 {
@@ -332,7 +332,7 @@ check_denylist(WIN_CERTIFICATE_EFI_PKCS *cert, UINT8 *sha256hash,
 	return EFI_SUCCESS;
 }
 
-static void
+void
 update_verification_method(verification_method_t method)
 {
 	if (verification_method == VERIFIED_BY_NOTHING)
@@ -342,7 +342,7 @@ update_verification_method(verification_method_t method)
 /*
  * Check whether the binary signature or hash are present in db or MokList
  */
-static EFI_STATUS
+EFI_STATUS
 check_allowlist(WIN_CERTIFICATE_EFI_PKCS *cert, UINT8 *sha256hash,
                 UINT8 *sha1hash)
 {
@@ -748,84 +748,3 @@ verify_buffer (char *data, int datasize,
 	return verify_buffer_sbat(data, datasize, context);
 }
 
-/*
- * Protocol entry point. If secure boot is enabled, verify that the provided
- * buffer is signed with a trusted key.
- */
-EFI_STATUS
-shim_verify(void *buffer, UINT32 size)
-{
-	EFI_STATUS efi_status = EFI_SUCCESS;
-	PE_COFF_LOADER_IMAGE_CONTEXT context;
-	UINT8 sha1hash[SHA1_DIGEST_SIZE];
-	UINT8 sha256hash[SHA256_DIGEST_SIZE];
-
-	if ((INT32)size < 0)
-		return EFI_INVALID_PARAMETER;
-
-	in_protocol = 1;
-
-	efi_status = read_header(buffer, size, &context, true);
-	if (EFI_ERROR(efi_status))
-		goto done;
-
-	efi_status = generate_hash(buffer, size, &context,
-				   sha256hash, sha1hash);
-	if (EFI_ERROR(efi_status))
-		goto done;
-
-	/* Measure the binary into the TPM */
-#ifdef REQUIRE_TPM
-	efi_status =
-#endif
-	tpm_log_pe((EFI_PHYSICAL_ADDRESS)(UINTN)buffer, size, 0, NULL,
-		   sha1hash, 4);
-#ifdef REQUIRE_TPM
-	if (EFI_ERROR(efi_status))
-		goto done;
-#endif
-
-	if (!secure_mode()) {
-		efi_status = EFI_SUCCESS;
-		goto done;
-	}
-
-	efi_status = verify_buffer(buffer, size,
-				   &context, sha256hash, sha1hash,
-				   false);
-done:
-	in_protocol = 0;
-	return efi_status;
-}
-
-EFI_STATUS
-shim_hash(char *data, int datasize, PE_COFF_LOADER_IMAGE_CONTEXT *context,
-          UINT8 *sha256hash, UINT8 *sha1hash)
-{
-	EFI_STATUS efi_status;
-
-	if (datasize < 0)
-		return EFI_INVALID_PARAMETER;
-
-	in_protocol = 1;
-	efi_status = generate_hash(data, datasize, context,
-				   sha256hash, sha1hash);
-	in_protocol = 0;
-
-	return efi_status;
-}
-
-EFI_STATUS
-shim_read_header(void *data, unsigned int datasize,
-                 PE_COFF_LOADER_IMAGE_CONTEXT *context)
-{
-	EFI_STATUS efi_status;
-
-	in_protocol = 1;
-	efi_status = read_header(data, datasize, context, true);
-	in_protocol = 0;
-
-	return efi_status;
-}
-
-// vim:fenc=utf-8:tw=75:noet

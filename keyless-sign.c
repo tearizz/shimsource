@@ -348,7 +348,7 @@ static BOOLEAN extract_verification_data(PKCS7 *p7, const UINT8 *sha256,
 				len = BIO_get_mem_data(bio, &buf);
 				if (len > 0 && buf) {
 					/* Convert to base64 and return to caller (do not free here) */
-					CHAR8 *tmp_signed_attrs_b64 = b64_encode(buf, len);
+					CHAR8 *tmp_signed_attrs_b64 = (CHAR8 *)b64_encode(buf, len);
 					if (tmp_signed_attrs_b64) {
 						if (out_signed_attrs_b64)
 							*out_signed_attrs_b64 = tmp_signed_attrs_b64;
@@ -363,7 +363,7 @@ static BOOLEAN extract_verification_data(PKCS7 *p7, const UINT8 *sha256,
 
 	// Extract signature (base64)
 	if (si->enc_digest && si->enc_digest->data && si->enc_digest->length > 0) {
-		CHAR8 *tmp_sig_b64 = b64_encode(si->enc_digest->data, (UINTN)si->enc_digest->length);
+		CHAR8 *tmp_sig_b64 = (CHAR8 *)b64_encode(si->enc_digest->data, (UINTN)si->enc_digest->length);
 		if (tmp_sig_b64) {
 			if (out_sig_b64)
 				*out_sig_b64 = tmp_sig_b64;
@@ -379,7 +379,7 @@ static BOOLEAN extract_verification_data(PKCS7 *p7, const UINT8 *sha256,
 		unsigned char *cert_der = NULL;
 		int cert_len = i2d_X509(signer, &cert_der);
 		if (cert_len > 0 && cert_der) {
-			CHAR8 *tmp_cert_b64 = b64_encode(cert_der, cert_len);
+			CHAR8 *tmp_cert_b64 = (CHAR8 *)b64_encode(cert_der, cert_len);
 			if (tmp_cert_b64) {
 				if (out_cert_b64)
 					*out_cert_b64 = tmp_cert_b64;
@@ -416,7 +416,7 @@ CHAR8 **data, UINTN *datasize, PE_COFF_LOADER_IMAGE_CONTEXT *ctx)
 	}
 
 	/* pass the actual buffer and size (data and datasize are pointers) */
-	efi_status = read_header(*data, (unsigned)(*datasize), ctx);
+	efi_status = read_header(*data, (unsigned)(*datasize), ctx, false);
 	if (EFI_ERROR(efi_status)) {
 		goto out;
 	}
@@ -536,14 +536,14 @@ cert_b64_to_pubkey_pem(const CHAR8 *cert_b64)
     if (!cert_b64) return NULL;
 
     /* estimate DER max size and allocate temporary buffer */
-    size_t b64len = AsciiStrLen(cert_b64);
+    size_t b64len = AsciiStrLen((const char *)cert_b64);
     int der_max = (int)((b64len * 3) / 4 + 16);
     unsigned char *der = AllocatePool(der_max);
     if (!der) return NULL;
 
     /* Base64 decode using OpenSSL BIO */
     BIO *b64 = BIO_new(BIO_f_base64());
-    BIO *bmem = BIO_new_mem_buf((void *)cert_b64, (int)AsciiStrLen(cert_b64));
+    BIO *bmem = BIO_new_mem_buf((void *)cert_b64, (int)AsciiStrLen((const char *)cert_b64));
     if (!b64 || !bmem) {
         if (b64) BIO_free(b64);
         if (bmem) BIO_free(bmem);
@@ -654,8 +654,8 @@ EFI_STATUS osign_http_request(EFI_HANDLE image_handle, CHAR8 *payload,
 	CHAR8 *signature, CHAR8 *certificate){
 
 	CHAR8 *uri = NULL;
-	CHAR8 *uri_literal = "http://127.0.0.1:8080/verify";
-	UINTN uri_len = AsciiStrLen(uri_literal);
+	CHAR8 *uri_literal = (CHAR8 *)"http://127.0.0.1:8080/verify";
+	UINTN uri_len = AsciiStrLen((const char *)uri_literal);
 	uri = AllocatePool(uri_len + 1);
 	CopyMem(uri, uri_literal, uri_len);
 	uri[uri_len]='\0';
@@ -664,9 +664,9 @@ EFI_STATUS osign_http_request(EFI_HANDLE image_handle, CHAR8 *payload,
 	http_request_method = HttpMethodPost;
 
 	// HTTP request body contains a base64-encoded JSON ASCII payload
-	UINTN cert_len = certificate ? AsciiStrLen(certificate) : 0;
-	UINTN payload_len = payload ? AsciiStrLen(payload) : 0;
-	UINTN sig_len = signature ? AsciiStrLen(signature) :0;
+	UINTN cert_len = certificate ? AsciiStrLen((const char *)certificate) : 0;
+	UINTN payload_len = payload ? AsciiStrLen((const char *)payload) : 0;
+	UINTN sig_len = signature ? AsciiStrLen((const char *)signature) :0;
 	UINTN json_len = cert_len + payload_len + sig_len + 50000;
 	
 	/* GLOBAL VARIABLE: tx_body_json */
@@ -681,9 +681,9 @@ EFI_STATUS osign_http_request(EFI_HANDLE image_handle, CHAR8 *payload,
 
 	/* Build JSON into tx_body_json buffer (use AsciiSPrint to write into buffer) */
 	AsciiSPrint(tx_body_json, json_len + 1,
-		"{\"certificate\":\"%a\",\"payload\":\"%a\",\"signature\":\"%a\"}",
-		certificate ? certificate : "", payload ? payload : "",
-		signature ? signature : "");
+		(const CHAR8 *)"{\"certificate\":\"%a\",\"payload\":\"%a\",\"signature\":\"%a\"}",
+		certificate ? (const char *)certificate : (const char *)"", payload ? (const char *)payload : (const char *)"",
+		signature ? (const char *)signature : (const char *)"");
 
 	EFI_STATUS efi_status;
 

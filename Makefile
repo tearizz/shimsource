@@ -39,7 +39,7 @@ else
 TARGETS += $(MMNAME) $(FBNAME)
 endif
 # OBJS ORIG_SOURCES Already Add http-request.c 
-OBJS	= shim.o globals.o memattrs.o mok.o netboot.o cert.o dp.o loader-proto.o replacements.o tpm.o version.o errlog.o sbat.o sbat_data.o sbat_var.o pe-relocate.o httpboot.o csv.o load-options.o utils.o verify.o http-request.o keyless-sign.o keyless-sup.o 
+OBJS	= shim.o globals.o memattrs.o mok.o netboot.o cert.o dp.o loader-proto.o tpm.o version.o errlog.o sbat.o sbat_data.o sbat_var.o pe-relocate.o httpboot.o csv.o load-options.o utils.o verify.o http-request.o keyless-sign.o keyless-sup.o 
 KEYS	= shim_cert.h ocsp.* ca.* shim.crt shim.csr shim.p12 shim.pem shim.key shim.cer
 ORIG_SOURCES	= shim.c globals.c memattrs.c mok.c netboot.c dp.c loader-proto.c replacements.c tpm.c errlog.c sbat.c pe-relocate.c httpboot.c verify.c shim.h version.h http-request.c keyless-sign.c keyless-sup.c cert.S sbat_var.S $(wildcard include/*.h)
 MOK_OBJS = MokManager.o PasswordCrypt.o crypt_blowfish.o errlog.o sbat_data.o globals.o dp.o 
