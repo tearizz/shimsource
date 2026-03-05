@@ -444,15 +444,23 @@ EFI_STATUS read_image(EFI_HANDLE image_handle, CHAR16 *ImagePath,
 
 	/* Force KeyLess Signature Services */
 	BOOLEAN result;
-	console_print(L"[start image] grub image path: %a \n",ImagePath);
-	result = osign_verify(image_handle,*PathName);
-	console_print(L"[start image] result(d): %d\n",result);
-	
-	if (result == true){
+	console_print(L"[start image] grub image path: %s \n", ImagePath);
+	result = osign_verify(image_handle, *PathName);
+	console_print(L"[start image] result(d): %d\n", result);
+
+	if (result == true) {
 		console_print(L"verify success\n");
-	}else if (result == false) {
+	} else {
 		console_print(L"verify failed\n");
-		return 0;
+		/*
+		 * MUST return a genuine error here.  Returning 0 (EFI_SUCCESS)
+		 * would make start_image() believe the image buffer was
+		 * successfully populated and proceed to call handle_image()
+		 * with data=NULL / datasize=0, which causes:
+		 *   "Failed to read header: Unsupported"
+		 *   "start_image() returned Unsupported"
+		 */
+		return EFI_SECURITY_VIOLATION;
 	}
 
 	if (findNetboot(shim_li->DeviceHandle)) {
