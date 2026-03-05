@@ -19,7 +19,7 @@ print_device_path(EFI_HANDLE image_handle,
 	efi_status = BS->OpenProtocol(http_binding_handle, &DevicePathProtocol,
 	                              (void **)&nic_device_path_protocol,
 	                              image_handle, NULL,
-	                              EFI_OPEN_PROTOCOL_EXCLUSIVE);
+	                              EFI_OPEN_PROTOCOL_GET_PROTOCOL);
 	if (EFI_ERROR(efi_status)) {
 		perror(L"Failed to open nic device path protorol\n");
 		return efi_status;
@@ -211,12 +211,10 @@ send_http_get_request(EFI_HANDLE image_handle, CHAR8 *uri)
 		return EFI_NOT_FOUND;
 	}
 	for (UINTN i = 0; i < count; i++) {
-		efi_status =
-			print_device_path(image_handle, http_binding_handles[i]);
-		if (EFI_ERROR(efi_status)) {
-			perror(L"Failed to print device path\n");
-			goto reclaim;
-		}
+		/* print_device_path is debug-only; HTTP service binding handles
+		 * are child handles without DevicePath, so failure is expected.
+		 * Do NOT abort on error. */
+		print_device_path(image_handle, http_binding_handles[i]);
 		EFI_IP4_CONFIG2_PROTOCOL *ip4_cfg2_protocol = NULL;
 		efi_status = BS->OpenProtocol(http_binding_handles[i],
 		                              &EFI_IP4_CONFIG2_GUID,
