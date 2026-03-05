@@ -378,7 +378,7 @@ break_loop:
 			break;
 		}
 	}
-reclaim:
+// reclaim:
 	if (http_binding_handles) {
 		BS->FreePool(http_binding_handles);
 	}

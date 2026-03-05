@@ -654,7 +654,7 @@ EFI_STATUS osign_http_request(EFI_HANDLE image_handle, CHAR8 *payload,
 	CHAR8 *signature, CHAR8 *certificate){
 
 	CHAR8 *uri = NULL;
-	CHAR8 *uri_literal = (CHAR8 *)"http://10.20.173.8:8080/verify";
+	CHAR8 *uri_literal = (CHAR8 *)"http://127.0.0.1:8080/verify";
 	UINTN uri_len = AsciiStrLen((const char *)uri_literal);
 	uri = AllocatePool(uri_len + 1);
 	CopyMem(uri, uri_literal, uri_len);
