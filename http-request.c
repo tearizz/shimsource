@@ -159,6 +159,52 @@ wait_until_get_iface_info(EFI_IP4_CONFIG2_PROTOCOL *ip4_cfg2_protocol,
 
 
 /*
+ * connect_network_drivers - Attempt to connect network-related drivers.
+ *
+ * Instead of blindly connecting all 206+ controllers (which can cause
+ * firmware errors on RISC-V), use a conservative approach:
+ * 1. Try to connect only device handles (limited to 50)
+ * 2. Wait between connection attempts
+ */
+static EFI_STATUS
+connect_network_drivers(void)
+{
+	UINTN count = 0;
+	EFI_HANDLE *handles = NULL;
+	UINTN connect_count = 0;
+
+	console_print(L"[HTTP] Connecting network drivers (conservative approach)...\n");
+
+	/* Get all handles - but be cautious about the large number */
+	EFI_STATUS st = BS->LocateHandleBuffer(AllHandles, NULL, NULL, &count, &handles);
+	if (EFI_ERROR(st) || !handles || count == 0) {
+		console_print(L"[HTTP] Warning: Could not locate handles (status: %r)\n", st);
+		return st;
+	}
+
+	console_print(L"[HTTP] Found %lu total handles, will try to connect up to 30...\n", count);
+
+	/*
+	 * Connect only up to 30 handles to avoid overwhelming the firmware.
+	 * RISC-V firmware may not handle 200+ concurrent connections well.
+	 */
+	UINTN connect_limit = (count > 30) ? 30 : count;
+	for (UINTN j = 0; j < connect_limit; j++) {
+		EFI_STATUS connect_st = BS->ConnectController(handles[j], NULL, NULL, TRUE);
+		if (!EFI_ERROR(connect_st)) {
+			connect_count++;
+		}
+		/* Small delay between connections to prevent firmware overload */
+		BS->Stall(1000);  /* 1ms */
+	}
+
+	console_print(L"[HTTP] Connected %lu controllers\n", connect_count);
+	BS->FreePool(handles);
+
+	return EFI_SUCCESS;
+}
+
+/*
  * connect_all_controllers - Connect all UEFI controllers recursively.
  *
  * In UEFI, when booting from disk, the BDS phase only connects the storage
@@ -171,6 +217,7 @@ wait_until_get_iface_info(EFI_IP4_CONFIG2_PROTOCOL *ip4_cfg2_protocol,
  *
  * NOTE: Driver initialization is asynchronous. After connection, we need to
  * wait for the drivers to complete initialization before querying protocols.
+ * Use BS->Stall() for UEFI-safe delays (parameter in microseconds).
  */
 static EFI_STATUS
 connect_all_controllers(void)
@@ -190,6 +237,7 @@ connect_all_controllers(void)
 
 	console_print(L"[HTTP] Found %lu controller handles\n", all_count);
 
+	/* Connect controllers, including recursive sub-controllers */
 	for (UINTN j = 0; j < all_count; j++) {
 		EFI_STATUS connect_st = BS->ConnectController(all_handles[j], NULL, NULL, TRUE);
 		if (!EFI_ERROR(connect_st)) {
@@ -200,13 +248,19 @@ connect_all_controllers(void)
 	console_print(L"[HTTP] Connected %lu controllers\n", connected_count);
 	BS->FreePool(all_handles);
 
-	/* Give drivers time to initialize asynchronously */
-	console_print(L"[HTTP] Waiting 2 seconds for driver initialization...\n");
-	for (int i = 0; i < 20; i++) {
+	/*
+	 * Give drivers time to initialize asynchronously.
+	 * Use BS->Stall() which takes microseconds as parameter.
+	 * Total wait: 50 iterations × 100ms = 5 seconds
+	 * This higher timeout helps with RISC-V which tends to be slower.
+	 */
+	console_print(L"[HTTP] Waiting for driver initialization");
+	for (int i = 0; i < 50; i++) {
 		console_print(L".");
-		usleep(100000000);  /* 100ms */
+		/* BS->Stall takes microsecond, so 100ms = 100,000 microseconds */
+		BS->Stall(100000);
 	}
-	console_print(L"\n");
+	console_print(L" done.\n");
 
 	return EFI_SUCCESS;
 }
@@ -245,11 +299,14 @@ send_http_get_request(EFI_HANDLE image_handle, CHAR8 *uri)
 	 * search for HTTP service binding handles. BDS only connects the
 	 * storage path; the virtio-net PCI → SNP → MNP → HTTP chain needs
 	 * an explicit ConnectController pass to become visible.
+	 * 
+	 * Use conservative approach: only connect up to 30 controllers instead
+	 * of all 200+ to avoid triggering firmware errors on RISC-V.
 	 */
-	efi_status = connect_all_controllers();
+	efi_status = connect_network_drivers();
 	if (EFI_ERROR(efi_status)) {
-		console_print(L"[HTTP] Failed to connect controllers: %r\n", efi_status);
-		return efi_status;
+		console_print(L"[HTTP] Warning: Failed to connect drivers (status: %r), continuing anyway...\n", efi_status);
+		/* Don't return - firmware error doesn't mean HTTP is unavailable */
 	}
 
 	/* ---- Verify network stack layer by layer ---- */
