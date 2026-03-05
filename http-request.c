@@ -204,66 +204,6 @@ connect_network_drivers(void)
 	return EFI_SUCCESS;
 }
 
-/*
- * connect_all_controllers - Connect all UEFI controllers recursively.
- *
- * In UEFI, when booting from disk, the BDS phase only connects the storage
- * path needed to load the boot option. Network device drivers
- * (VirtioPciDeviceDxe → VirtioNetDxe → MnpDxe → HttpDxe) are NOT connected
- * automatically unless a network boot option is present. This function
- * explicitly connects all controller handles so that the full network stack
- * (SNP → MNP → ARP → IP4 → TCP4 → HTTP) is initialised before we call
- * LocateHandleBuffer for EFI_HTTP_SERVICE_BINDING_PROTOCOL.
- *
- * NOTE: Driver initialization is asynchronous. After connection, we need to
- * wait for the drivers to complete initialization before querying protocols.
- * Use BS->Stall() for UEFI-safe delays (parameter in microseconds).
- */
-static EFI_STATUS
-connect_all_controllers(void)
-{
-	UINTN all_count = 0;
-	EFI_HANDLE *all_handles = NULL;
-	UINTN connected_count = 0;
-
-	console_print(L"[HTTP] Connecting all UEFI controllers (may take time)...\n");
-
-	EFI_STATUS st = BS->LocateHandleBuffer(AllHandles, NULL, NULL,
-	                                       &all_count, &all_handles);
-	if (EFI_ERROR(st) || !all_handles) {
-		console_print(L"[HTTP] Failed to locate handles: %r\n", st);
-		return st;
-	}
-
-	console_print(L"[HTTP] Found %lu controller handles\n", all_count);
-
-	/* Connect controllers, including recursive sub-controllers */
-	for (UINTN j = 0; j < all_count; j++) {
-		EFI_STATUS connect_st = BS->ConnectController(all_handles[j], NULL, NULL, TRUE);
-		if (!EFI_ERROR(connect_st)) {
-			connected_count++;
-		}
-	}
-
-	console_print(L"[HTTP] Connected %lu controllers\n", connected_count);
-	BS->FreePool(all_handles);
-
-	/*
-	 * Give drivers time to initialize asynchronously.
-	 * Use BS->Stall() which takes microseconds as parameter.
-	 * Total wait: 50 iterations × 100ms = 5 seconds
-	 * This higher timeout helps with RISC-V which tends to be slower.
-	 */
-	console_print(L"[HTTP] Waiting for driver initialization");
-	for (int i = 0; i < 50; i++) {
-		console_print(L".");
-		/* BS->Stall takes microsecond, so 100ms = 100,000 microseconds */
-		BS->Stall(100000);
-	}
-	console_print(L" done.\n");
-
-	return EFI_SUCCESS;
-}
 
 /*
  * check_protocol_available - Check if a protocol is available on system
