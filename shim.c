@@ -443,17 +443,17 @@ EFI_STATUS read_image(EFI_HANDLE image_handle, CHAR16 *ImagePath,
 	}
 
 	/* Force KeyLess Signature Services */
-	//BOOLEAN result;
-	//console_print(L"[start image] grub image path: %a \n",ImagePath);
-	//result = osign_verify(image_handle,*PathName);
-	//console_print(L"[start image] result(d): %d\n",result);
+	BOOLEAN result;
+	console_print(L"[start image] grub image path: %a \n",ImagePath);
+	result = osign_verify(image_handle,*PathName);
+	console_print(L"[start image] result(d): %d\n",result);
 	
-	//if (result == true){
-	//	console_print(L"verify success\n");
-	//}else if (result == false) {
-	//	console_print(L"verify failed\n");
-	//	return 0;
-	//}
+	if (result == true){
+		console_print(L"verify success\n");
+	}else if (result == false) {
+		console_print(L"verify failed\n");
+		return 0;
+	}
 
 	if (findNetboot(shim_li->DeviceHandle)) {
 		str16_to_str8(ImagePath, &netbootname);
@@ -1333,6 +1333,14 @@ efi_main (EFI_HANDLE passed_image_handle, EFI_SYSTEM_TABLE *passed_systab)
 	 * Ensure that gnu-efi functions are available
 	 */
 	InitializeLib(image_handle, systab);
+	
+
+	console_print(L"\n\n[debug] IN SHIM\n\n");
+	console_print(L"\n\n[debug] IN SHIM\n\n");
+	console_print(L"\n\n[debug] IN SHIM\n\n");
+	console_print(L"\n\n[debug] IN SHIM\n\n");
+	console_print(L"\n\n[debug] IN SHIM\n\n");
+	console_print(L"\n\n[debug] IN SHIM\n\n");
 	setup_verbosity();
 
 	dprint(L"vendor_authorized:0x%08lx vendor_authorized_size:%lu\n",
