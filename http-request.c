@@ -158,10 +158,46 @@ wait_until_get_iface_info(EFI_IP4_CONFIG2_PROTOCOL *ip4_cfg2_protocol,
 }
 
 
+/*
+ * connect_all_controllers - Connect all UEFI controllers recursively.
+ *
+ * In UEFI, when booting from disk, the BDS phase only connects the storage
+ * path needed to load the boot option. Network device drivers
+ * (VirtioPciDeviceDxe → VirtioNetDxe → MnpDxe → HttpDxe) are NOT connected
+ * automatically unless a network boot option is present. This function
+ * explicitly connects all controller handles so that the full network stack
+ * (SNP → MNP → ARP → IP4 → TCP4 → HTTP) is initialised before we call
+ * LocateHandleBuffer for EFI_HTTP_SERVICE_BINDING_PROTOCOL.
+ */
+static void
+connect_all_controllers(void)
+{
+	UINTN all_count = 0;
+	EFI_HANDLE *all_handles = NULL;
+
+	EFI_STATUS st = BS->LocateHandleBuffer(AllHandles, NULL, NULL,
+	                                       &all_count, &all_handles);
+	if (EFI_ERROR(st) || !all_handles)
+		return;
+
+	for (UINTN j = 0; j < all_count; j++)
+		BS->ConnectController(all_handles[j], NULL, NULL, TRUE);
+
+	BS->FreePool(all_handles);
+}
+
 EFI_STATUS
 send_http_get_request(EFI_HANDLE image_handle, CHAR8 *uri)
 {
 	EFI_STATUS efi_status;
+
+	/*
+	 * Ensure the network driver stack has been connected before we
+	 * search for HTTP service binding handles. BDS only connects the
+	 * storage path; the virtio-net PCI → SNP → MNP → HTTP chain needs
+	 * an explicit ConnectController pass to become visible.
+	 */
+	connect_all_controllers();
 
 	UINTN count = 0;
 	EFI_HANDLE *http_binding_handles = NULL;
