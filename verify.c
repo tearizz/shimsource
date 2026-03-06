@@ -742,7 +742,7 @@ verify_buffer (char *data, int datasize,
 	efi_status = verify_buffer_authenticode(data, datasize, context,
 						sha256hash, sha1hash,
 						parent_verified);
-	if (EFI_ERROR(efi_status))
+	if (!EFI_ERROR(efi_status))
 		return efi_status;
 
 	return verify_buffer_sbat(data, datasize, context);
